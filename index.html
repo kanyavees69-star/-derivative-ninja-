@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Derivative Fruit Ninja AR</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- MediaPipe Hands & Camera Utils -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Kanit:wght@400;600;800&family=Fredoka+One&display=swap');
+        
+        body {
+            font-family: 'Kanit', sans-serif;
+            margin: 0;
+            overflow: hidden;
+            background-color: #0f172a;
+            color: white;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .math-font {
+            font-family: 'Fredoka One', cursive;
+        }
+
+        /* Container for absolute positioning */
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: none;
+        }
+
+        /* Video element (hidden, used only for processing) */
+        #input-video {
+            display: none;
+        }
+
+        /* Canvas where the game renders */
+        #output-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            /* Flip horizontal so camera acts like a mirror */
+            transform: scaleX(-1);
+            touch-action: none;
+        }
+
+        /* UI Overlays */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 20px;
+            box-sizing: border-box;
+            z-index: 10;
+        }
+
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.65);
+            backdrop-filter: blur(12px);
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+
+        /* Blade effect cursor for mouse/touch */
+        .cursor-blade {
+            cursor: crosshair;
+        }
+    </style>
+</head>
+<body class="cursor-blade">
+
+    <!-- Login Screen -->
+    <div id="login-screen" class="flex flex-col items-center justify-center w-screen h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-black z-50 absolute top-0 left-0 p-4">
+        <div class="glass-panel p-8 text-center max-w-md w-full shadow-2xl border border-indigo-500/30">
+            <div class="inline-block p-3 rounded-2xl bg-indigo-500/20 mb-3 text-4xl">⚔️</div>
+            <h1 class="text-4xl font-extrabold mb-2 text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 via-teal-300 to-cyan-400 math-font tracking-wide">
+                Derivative Fruit Ninja
+            </h1>
+            <p class="mb-6 text-gray-300 text-sm">ฟันคำตอบการดิฟแคลคูลัสด้วยปลายนิ้วชี้ หรือใช้เมาส์/สัมผัสหน้าจอ!</p>
+            
+            <input type="text" id="player-name" placeholder="กรอกชื่อนักเรียน..." 
+                   class="w-full px-4 py-3 rounded-xl bg-slate-800/80 border border-slate-600 focus:outline-none focus:border-cyan-400 mb-6 text-white text-lg placeholder-gray-400 text-center font-semibold">
+            
+            <button onclick="startGame()" 
+                    class="w-full bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-600 hover:from-emerald-400 hover:to-cyan-500 text-white font-bold py-3.5 px-6 rounded-xl transition-all transform hover:scale-[1.02] active:scale-95 shadow-lg shadow-cyan-500/25 text-lg">
+                เข้าสู่ระบบและเริ่มเล่น ⚔️
+            </button>
+            
+            <div class="mt-6 p-3 rounded-xl bg-slate-800/40 text-xs text-gray-400 text-left space-y-1 border border-slate-700/50">
+                <p class="text-gray-300 font-semibold mb-1">💡 วิธีการเล่น:</p>
+                <p>• อนุญาตใช้งาน Webcam เพื่อใช้ "ปลายนิ้วชี้" เป็นดาบฟันคำตอบ</p>
+                <p>• หรือใช้เมาส์ลาก / ปัดนิ้วบนหน้าจอมือถือเพื่อฟันคำตอบได้เช่นกัน</p>
+                <p>• มีเวลาเล่น 2 นาที (120 วินาที) ตอบถูก +10 คะแนน / ตอบผิด -5 คะแนน</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Game Container -->
+    <div id="game-container">
+        <video id="input-video" autoplay playsinline muted></video>
+        <canvas id="output-canvas"></canvas>
+        
+        <!-- UI Layer on top of canvas -->
+        <div id="ui-layer">
+            <div class="flex justify-between items-start w-full pointer-events-auto">
+                <!-- Player Info & Score -->
+                <div class="glass-panel px-6 py-3 flex flex-col min-w-[140px]">
+                    <span id="display-name" class="font-bold text-base text-cyan-300 truncate max-w-[150px]">Player</span>
+                    <div class="text-2xl font-black math-font text-yellow-400">Score: <span id="score-display">0</span></div>
+                </div>
+                
+                <!-- Controls / Timer -->
+                <div class="flex items-center gap-3">
+                    <div class="glass-panel px-6 py-3 text-center min-w-[120px]">
+                        <div class="text-xs text-gray-300 font-semibold">Time Left</div>
+                        <div id="timer-display" class="text-3xl font-black math-font text-rose-400">120</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Current Question Display -->
+            <div class="absolute top-[22%] left-1/2 transform -translate-x-1/2 text-center pointer-events-none w-full px-4 max-w-xl">
+                <div class="glass-panel px-8 py-4 shadow-2xl border-cyan-500/40 inline-block">
+                    <div class="text-sm font-semibold text-cyan-300 mb-1">จงหาอนุพันธ์ d/dx</div>
+                    <div id="question-display" class="text-4xl md:text-5xl font-black math-font text-white drop-shadow-[0_4px_8px_rgba(0,0,0,0.8)]">
+                        d/dx(x³)
+                    </div>
+                </div>
+                <div id="feedback-display" class="mt-3 text-2xl md:text-3xl font-bold opacity-0 transition-opacity duration-300 math-font">
+                    Correct! +10
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Game Over Screen -->
+    <div id="game-over-screen" class="hidden flex-col items-center justify-center w-screen h-screen bg-black/85 z-50 absolute top-0 left-0 backdrop-blur-md p-4">
+        <div class="glass-panel p-8 text-center max-w-lg w-full border border-rose-500/30">
+            <h1 class="text-5xl font-extrabold mb-2 text-rose-500 math-font tracking-wider">Time's Up!</h1>
+            <p class="text-gray-300 mb-6 text-sm">หมดเวลาการทดสอบความรู้แคลคูลัส</p>
+            
+            <div class="bg-slate-900/80 rounded-xl p-5 mb-6 text-left space-y-3 border border-slate-700">
+                <p class="text-lg border-b border-slate-800 pb-2">ผู้เล่น: <span id="summary-name" class="font-bold text-cyan-400 float-right"></span></p>
+                <p class="text-lg border-b border-slate-800 pb-2">คะแนนรวม: <span id="summary-score" class="font-bold text-yellow-400 float-right text-3xl math-font"></span></p>
+                <p class="text-sm text-gray-400">เวลา Login: <span id="summary-login" class="float-right text-gray-200 font-mono"></span></p>
+                <p class="text-sm text-gray-400">เวลา Logout: <span id="summary-logout" class="float-right text-gray-200 font-mono"></span></p>
+            </div>
+            
+            <button onclick="location.reload()" 
+                    class="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-3.5 px-8 rounded-xl transition-all transform hover:scale-105 shadow-lg shadow-indigo-500/30 text-lg">
+                เล่นอีกครั้ง 🔄
+            </button>
+        </div>
+    </div>
+
+    <!-- Custom Alert / Notice Modal -->
+    <div id="custom-modal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="glass-panel p-6 max-w-sm w-full text-center space-y-4 border border-yellow-500/40">
+            <div class="text-3xl">⚠️</div>
+            <h3 id="modal-title" class="text-xl font-bold text-yellow-400 math-font">แจ้งเตือน</h3>
+            <p id="modal-msg" class="text-gray-200 text-sm leading-relaxed"></p>
+            <button onclick="closeModal()" class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-bold text-white transition shadow-md">ตกลง</button>
+        </div>
+    </div>
+
+    <script>
+        // Game State Variables
+        let playerName = "";
+        let loginTime = null;
+        let score = 0;
+        let timeLeft = 120; // 2 Minutes
+        let timerInterval = null;
+        let gameActive = false;
+        
+        // Comprehensive Calculus Questions Pool (Power Rule & Polynomials only)
+        const mathQuestions = [
+            { q: "d/dx(x²)", correct: "2x", wrongs: ["x", "3x²", "2"] },
+            { q: "d/dx(x³)", correct: "3x²", wrongs: ["x²", "3x", "x³"] },
+            { q: "d/dx(5x⁴)", correct: "20x³", wrongs: ["5x³", "20x⁴", "9x³"] },
+            { q: "d/dx(3x² + 2x)", correct: "6x + 2", wrongs: ["6x", "3x + 2", "6x² + 2"] },
+            { q: "d/dx(√x)", correct: "1/(2√x)", wrongs: ["1/√x", "-1/(2√x)", "2√x"] },
+            { q: "d/dx(1/x)", correct: "-1/x²", wrongs: ["1/x²", "-1/x", "-2/x²"] },
+            { q: "d/dx(x⁴)", correct: "4x³", wrongs: ["x³", "4x⁴", "3x³"] },
+            { q: "d/dx(x⁵)", correct: "5x⁴", wrongs: ["x⁴", "5x⁵", "4x⁴"] },
+            { q: "d/dx(7x²)", correct: "14x", wrongs: ["7x", "14x²", "7"] },
+            { q: "d/dx(4x³)", correct: "12x²", wrongs: ["4x²", "12x³", "8x²"] },
+            { q: "d/dx(x³ - 5x)", correct: "3x² - 5", wrongs: ["3x²", "3x - 5", "x² - 5"] },
+            { q: "d/dx(2x⁴ + 3x²)", correct: "8x³ + 6x", wrongs: ["8x³", "6x³ + 6x", "8x² + 6x"] },
+            { q: "d/dx(x⁶)", correct: "6x⁵", wrongs: ["x⁵", "6x⁶", "5x⁴"] },
+            { q: "d/dx(10x)", correct: "10", wrongs: ["0", "10x", "1"] },
+            { q: "d/dx(15)", correct: "0", wrongs: ["15", "1", "15x"] },
+            { q: "d/dx(2/x²)", correct: "-4/x³", wrongs: ["4/x³", "-2/x³", "-4/x²"] },
+            { q: "d/dx(3√x)", correct: "3/(2√x)", wrongs: ["3/√x", "1/(2√x)", "6√x"] },
+            { q: "d/dx(4x⁵ - 2x³)", correct: "20x⁴ - 6x²", wrongs: ["20x⁴", "10x⁴ - 6x²", "20x⁵ - 6x²"] },
+            { q: "d/dx(x⁸)", correct: "8x⁷", wrongs: ["x⁷", "8x⁸", "7x⁶"] },
+            { q: "d/dx(x⁴ - 3x² + 7)", correct: "4x³ - 6x", wrongs: ["4x³ - 6x + 7", "4x² - 6", "3x³ - 3x"] },
+            { q: "d/dx(6x³ - 4x + 1)", correct: "18x² - 4", wrongs: ["18x²", "18x - 4", "6x² - 4"] },
+            { q: "d/dx(x⁷)", correct: "7x⁶", wrongs: ["6x⁷", "7x⁷", "x⁶"] },
+            { q: "d/dx(8x⁵)", correct: "40x⁴", wrongs: ["8x⁴", "40x⁵", "35x⁴"] },
+            { q: "d/dx(-3x⁴)", correct: "-12x³", wrongs: ["12x³", "-3x³", "-12x⁴"] },
+            { q: "d/dx(x²/2)", correct: "x", wrongs: ["x/2", "2x", "1"] },
+            { q: "d/dx(9x² - 7)", correct: "18x", wrongs: ["9x", "18x - 7", "18"] },
+            { q: "d/dx(x³ + x² + x + 1)", correct: "3x² + 2x + 1", wrongs: ["3x² + 2x", "3x² + x + 1", "x² + x + 1"] },
+            { q: "d/dx(5x³ + 4)", correct: "15x²", wrongs: ["15x² + 4", "5x²", "15x³"] },
+            { q: "d/dx(2x⁵ - 10)", correct: "10x⁴", wrongs: ["10x⁴ - 10", "10x⁵", "2x⁴"] },
+            { q: "d/dx(3x⁴ + 5x)", correct: "12x³ + 5", wrongs: ["12x³", "12x⁴ + 5", "3x³ + 5"] }
+        ];
+        
+        let shuffledQuestions = [];
+        let currentQuestionIndex = 0;
+        
+        const videoElement = document.getElementById('input-video');
+        const canvasElement = document.getElementById('output-canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        
+        function resizeCanvas() {
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        let fruits = [];
+        let trail = [];
+        const TRAIL_LENGTH = 12;
+        const SWIPE_THRESHOLD = 20;
+        let lastFingerPos = null;
+
+        function showModal(msg, title = "แจ้งเตือน") {
+            document.getElementById('modal-title').innerText = title;
+            document.getElementById('modal-msg').innerText = msg;
+            document.getElementById('custom-modal').classList.remove('hidden');
+        }
+
+        function closeModal() {
+            document.getElementById('custom-modal').classList.add('hidden');
+        }
+
+        function formatTime(date) {
+            return date.toLocaleTimeString('th-TH', { hour12: false }) + " น.";
+        }
+
+        class Fruit {
+            constructor(text, isCorrect, startX) {
+                this.text = text;
+                this.isCorrect = isCorrect;
+                this.radius = 75; // ขยายขนาดลูกบอลจาก 55 เป็น 75 ให้ฟันง่ายและเห็นชัดขึ้น
+                
+                // Canvas coordinates
+                this.x = startX * canvasElement.width;
+                this.y = canvasElement.height + this.radius; // Start below screen
+                
+                // Physics - ปรับความเร็วและการสไลด์แนวนอนให้ช้าลง
+                this.vx = (Math.random() - 0.5) * 1.2;
+                
+                // Adjust jump height based on screen height (ปรับความเร็วลอยขึ้นให้ช้าและนุ่มนวลขึ้น)
+                const baseJump = -9.5 * (canvasElement.height / 800); 
+                this.vy = baseJump + (Math.random() * -1.5); 
+                
+                // ปรับค่าแรงโน้มถ่วงให้ลดลง เพื่อให้คำตอบลอยค้างอยู่กลางหน้านานขึ้น อ่านทันได้ง่ายขึ้น
+                this.gravity = 0.09;
+                this.sliced = false;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.vy += this.gravity;
+            }
+
+            draw(ctx) {
+                if (this.sliced) return;
+
+                ctx.save();
+
+                // Outer glow
+                ctx.shadowColor = '#60a5fa';
+                ctx.shadowBlur = 15;
+
+                // Draw Bubble / Fruit Circle
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                
+                const gradient = ctx.createRadialGradient(
+                    this.x - 15, this.y - 15, 5, 
+                    this.x, this.y, this.radius
+                );
+                gradient.addColorStop(0, '#3b82f6');
+                gradient.addColorStop(0.6, '#1d4ed8');
+                gradient.addColorStop(1, '#0f172a');
+                
+                ctx.fillStyle = gradient;
+                ctx.fill();
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = 'rgba(96, 165, 250, 0.8)';
+                ctx.stroke();
+
+                ctx.restore();
+
+                // DRAW TEXT:
+                // Canvas has CSS `transform: scaleX(-1)` mirroring.
+                // We flip text scaleX(-1) locally so it renders readable to the player!
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.scale(-1, 1);
+
+                // ปรับขนาดฟอนต์ให้ใหญ่ขึ้น (สูงสุด 40px) และย่อขนาดอัตโนมัติตามความยาวคำตอบ
+                let fontSize = 40;
+                if (this.text.length > 10) {
+                    fontSize = 28;
+                } else if (this.text.length > 7) {
+                    fontSize = 34;
+                }
+
+                ctx.font = `bold ${fontSize}px "Fredoka One", "Kanit", sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+
+                // Text Shadow
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+                ctx.fillText(this.text, 2, 2);
+
+                // Main Text
+                ctx.fillStyle = '#ffffff';
+                ctx.fillText(this.text, 0, 0);
+
+                ctx.restore();
+            }
+        }
+
+        function generateDynamicQuestion() {
+            const a = Math.floor(Math.random() * 8) + 2; 
+            const n = Math.floor(Math.random() * 4) + 2; 
+            const b = Math.floor(Math.random() * 9) + 1; 
+            
+            const coeff = a * n;
+            const exp = n - 1;
+            const expStr = exp === 1 ? "" : (exp === 2 ? "²" : (exp === 3 ? "³" : `^${exp}`));
+            const nStr = n === 2 ? "²" : (n === 3 ? "³" : `^${n}`);
+            
+            return {
+                q: `d/dx(${a}x${nStr} + ${b}x)`,
+                correct: `${coeff}x${expStr} + ${b}`,
+                wrongs: [
+                    `${a}x${expStr} + ${b}`,
+                    `${coeff}x${nStr} + ${b}`,
+                    `${coeff}x${expStr}`
+                ]
+            };
+        }
+
+        function loadQuestion() {
+            let qData;
+            if (currentQuestionIndex < shuffledQuestions.length) {
+                qData = shuffledQuestions[currentQuestionIndex];
+            } else {
+                qData = generateDynamicQuestion();
+            }
+            
+            document.getElementById('question-display').innerText = qData.q;
+            
+            fruits = [];
+            
+            let options = [
+                { text: qData.correct, isCorrect: true },
+                { text: qData.wrongs[0], isCorrect: false },
+                { text: qData.wrongs[1], isCorrect: false },
+                { text: qData.wrongs[2], isCorrect: false }
+            ];
+            
+            options.sort(() => Math.random() - 0.5);
+            
+            const spacing = 0.8 / 4;
+            let startX = 0.1 + (spacing / 2);
+            
+            options.forEach(opt => {
+                fruits.push(new Fruit(opt.text, opt.isCorrect, startX));
+                startX += spacing;
+            });
+        }
+
+        function startGame() {
+            const nameInput = document.getElementById('player-name').value.trim();
+            if (!nameInput) {
+                showModal("กรุณากรอกชื่อผู้เล่นก่อนเริ่มเกมครับ");
+                return;
+            }
+
+            playerName = nameInput;
+            loginTime = new Date();
+            
+            document.getElementById('login-screen').style.display = 'none';
+            document.getElementById('game-container').style.display = 'block';
+            document.getElementById('display-name').innerText = playerName;
+            
+            // Start Game Loop & Timer immediately
+            gameActive = true;
+            score = 0;
+            timeLeft = 120; // 2 Minutes
+            updateScore(0);
+            
+            shuffledQuestions = [...mathQuestions].sort(() => Math.random() - 0.5);
+            currentQuestionIndex = 0;
+            
+            if (timerInterval) clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                timeLeft--;
+                document.getElementById('timer-display').innerText = timeLeft;
+                if (timeLeft <= 0) endGame();
+            }, 1000);
+
+            loadQuestion();
+            gameLoop();
+
+            // Attempt to load webcam asynchronously
+            initMediaPipe().catch(err => {
+                console.warn("MediaPipe Camera init note:", err);
+                showModal("ไม่พบกล้องหรือไม่ได้รับอนุญาต คุณยังสามารถใช้เมาส์ลาก หรือปัดนิ้วบนหน้าจอเพื่อเล่นแทนได้!", "โหมดใช้เมาส์ / สัมผัสหน้าจอ");
+            });
+        }
+
+        function endGame() {
+            gameActive = false;
+            if (timerInterval) clearInterval(timerInterval);
+            const logoutTime = new Date();
+            
+            document.getElementById('game-container').style.display = 'none';
+            const gameOverScreen = document.getElementById('game-over-screen');
+            gameOverScreen.style.display = 'flex';
+            
+            document.getElementById('summary-name').innerText = playerName;
+            document.getElementById('summary-score').innerText = score;
+            document.getElementById('summary-login').innerText = formatTime(loginTime);
+            document.getElementById('summary-logout').innerText = formatTime(logoutTime);
+        }
+
+        function updateScore(points) {
+            score += points;
+            document.getElementById('score-display').innerText = score;
+        }
+
+        function showFeedback(message, isCorrect) {
+            const fb = document.getElementById('feedback-display');
+            fb.innerText = message;
+            fb.style.color = isCorrect ? '#4ade80' : '#f87171';
+            fb.style.opacity = '1';
+            
+            setTimeout(() => {
+                fb.style.opacity = '0';
+            }, 1000);
+        }
+
+        function checkSlice(fingerX, fingerY, speed) {
+            if (speed < SWIPE_THRESHOLD) return;
+
+            for (let i = fruits.length - 1; i >= 0; i--) {
+                let f = fruits[i];
+                if (f.sliced) continue;
+
+                let dx = fingerX - f.x;
+                let dy = fingerY - f.y;
+                let distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance < f.radius + 20) {
+                    f.sliced = true;
+                    
+                    if (f.isCorrect) {
+                        updateScore(10);
+                        showFeedback("✨ Correct! +10", true);
+                        currentQuestionIndex++;
+                        fruits = []; 
+                        setTimeout(loadQuestion, 400);
+                    } else {
+                        updateScore(-5);
+                        showFeedback("❌ Try again! -5", false);
+                    }
+                    break;
+                }
+            }
+        }
+
+        function gameLoop() {
+            if (!gameActive) return;
+
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+            // Draw Video frame to canvas if available
+            if (videoElement.readyState === videoElement.HAVE_ENOUGH_DATA) {
+                canvasCtx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+            }
+
+            // Update & Draw Fruits
+            let allFallen = true;
+            fruits.forEach(f => {
+                f.update();
+                f.draw(canvasCtx);
+                if (f.y - f.radius < canvasElement.height) {
+                    allFallen = false;
+                }
+            });
+
+            // Reload if all fruits fell off screen
+            if (fruits.length > 0 && allFallen) {
+                fruits = [];
+                loadQuestion();
+            }
+
+            // Draw Sword Trail
+            if (trail.length > 1) {
+                canvasCtx.beginPath();
+                canvasCtx.moveTo(trail[0].x, trail[0].y);
+                for (let i = 1; i < trail.length; i++) {
+                    canvasCtx.lineTo(trail[i].x, trail[i].y);
+                }
+                
+                canvasCtx.lineCap = 'round';
+                canvasCtx.lineJoin = 'round';
+                canvasCtx.lineWidth = 12;
+                canvasCtx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+                canvasCtx.shadowColor = '#06b6d4';
+                canvasCtx.shadowBlur = 15;
+                canvasCtx.stroke();
+                
+                canvasCtx.lineWidth = 4;
+                canvasCtx.strokeStyle = '#ffffff';
+                canvasCtx.shadowBlur = 0;
+                canvasCtx.stroke();
+            }
+
+            if (trail.length > 0) {
+                trail.shift(); 
+            }
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        let isMouseDown = false;
+        
+        function addTrailPoint(clientX, clientY) {
+            if (!gameActive) return;
+            // Canvas has CSS scaleX(-1), so client coordinate clientX corresponds to canvas width - clientX
+            const x = canvasElement.width - clientX;
+            const y = clientY;
+
+            trail.push({ x, y });
+            if (trail.length > TRAIL_LENGTH) trail.shift();
+
+            if (lastFingerPos) {
+                const dx = x - lastFingerPos.x;
+                const dy = y - lastFingerPos.y;
+                const speed = Math.sqrt(dx * dx + dy * dy);
+                checkSlice(x, y, speed);
+            }
+            lastFingerPos = { x, y };
+        }
+
+        canvasElement.addEventListener('mousedown', (e) => {
+            isMouseDown = true;
+            addTrailPoint(e.clientX, e.clientY);
+        });
+        canvasElement.addEventListener('mousemove', (e) => {
+            if (isMouseDown) {
+                addTrailPoint(e.clientX, e.clientY);
+            }
+        });
+        canvasElement.addEventListener('mouseup', () => { isMouseDown = false; lastFingerPos = null; });
+
+        canvasElement.addEventListener('touchstart', (e) => {
+            if (e.touches.length > 0) {
+                const touch = e.touches[0];
+                addTrailPoint(touch.clientX, touch.clientY);
+            }
+        });
+        canvasElement.addEventListener('touchmove', (e) => {
+            if (e.touches.length > 0) {
+                const touch = e.touches[0];
+                addTrailPoint(touch.clientX, touch.clientY);
+            }
+        });
+        canvasElement.addEventListener('touchend', () => { lastFingerPos = null; });
+
+        async function initMediaPipe() {
+            if (!window.Hands || !window.Camera) {
+                console.warn("MediaPipe libraries not yet available.");
+                return;
+            }
+
+            const hands = new window.Hands({locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+            }});
+            
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.6,
+                minTrackingConfidence: 0.6
+            });
+            
+            hands.onResults(onHandResults);
+            
+            const camera = new window.Camera(videoElement, {
+                onFrame: async () => {
+                    if (gameActive) {
+                        await hands.send({image: videoElement});
+                    }
+                },
+                width: 1280,
+                height: 720
+            });
+            
+            await camera.start();
+        }
+
+        function onHandResults(results) {
+            if (!gameActive) return;
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const indexFingerTip = results.multiHandLandmarks[0][8];
+                const x = indexFingerTip.x * canvasElement.width;
+                const y = indexFingerTip.y * canvasElement.height;
+                
+                trail.push({x, y});
+                if (trail.length > TRAIL_LENGTH) {
+                    trail.shift();
+                }
+
+                if (lastFingerPos) {
+                    const dx = x - lastFingerPos.x;
+                    const dy = y - lastFingerPos.y;
+                    const speed = Math.sqrt(dx * dx + dy * dy);
+                    
+                    checkSlice(x, y, speed);
+                }
+                
+                lastFingerPos = {x, y};
+            } else {
+                lastFingerPos = null;
+            }
+        }
+    </script>
+</body>
+</html>
